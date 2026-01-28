@@ -125,11 +125,12 @@ const AssetCalculator = () => {
       lowerGuardrail: 20,
       expectedAPY: 7,
       volatility: 15,
-      simulations: 1000,
-      years: 30
+      simulations: 10,
+      years: 40
     };
   });
-  const [withdrawalResults, setWithdrawalResults] = useState<WithdrawalResult[]>([]);
+  const [allSimulations, setAllSimulations] = useState<WithdrawalResult[][]>([]);
+  const [selectedSimIndex, setSelectedSimIndex] = useState<number | null>(null);
   const [showWithdrawalSim, setShowWithdrawalSim] = useState(false);
 
   // --- Save to localStorage on state changes ---
@@ -456,14 +457,45 @@ const AssetCalculator = () => {
       ? currentTotalValue
       : (projectionData[projectionData.length - 1]?.total || currentTotalValue);
 
-    const results = runGKSimulation(startingValue, withdrawalParams, withdrawalParams.years);
-    setWithdrawalResults(results);
+    // Run Monte Carlo simulations
+    const simulations: WithdrawalResult[][] = [];
+    for (let i = 0; i < withdrawalParams.simulations; i++) {
+      const simResult = runGKSimulation(startingValue, withdrawalParams, withdrawalParams.years);
+      simulations.push(simResult);
+    }
+
+    setAllSimulations(simulations);
+    setSelectedSimIndex(null); // Reset selection
     setShowWithdrawalSim(true);
   };
 
+  // --- Statistics Helper Functions ---
+  const calculateSuccessRate = (sims: WithdrawalResult[][]): number => {
+    const successful = sims.filter(sim => {
+      const final = sim[sim.length - 1];
+      return final && final.portfolioValue > 0;
+    }).length;
+    return Math.round((successful / sims.length) * 100);
+  };
+
+  const calculateMedianFinal = (sims: WithdrawalResult[][]): number => {
+    const finalValues = sims
+      .map(sim => sim[sim.length - 1]?.portfolioValue || 0)
+      .sort((a, b) => a - b);
+    return finalValues[Math.floor(finalValues.length / 2)];
+  };
+
+  const getBestCase = (sims: WithdrawalResult[][]): number => {
+    return Math.max(...sims.map(sim => sim[sim.length - 1]?.portfolioValue || 0));
+  };
+
+  const getWorstCase = (sims: WithdrawalResult[][]): number => {
+    return Math.min(...sims.map(sim => sim[sim.length - 1]?.portfolioValue || 0));
+  };
 
   // Calculate total monthly contribution for display
   const totalMonthlyContribution = projection.targets.reduce((sum, t) => sum + t.monthlyAmount, 0);
+
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-50 font-sans selection:bg-emerald-500/30">
@@ -908,9 +940,79 @@ const AssetCalculator = () => {
                   執行模擬
                 </button>
 
-                {showWithdrawalSim && withdrawalResults.length > 0 && (
+                {showWithdrawalSim && allSimulations.length > 0 && (
                   <div className="border-t border-zinc-800 pt-6 space-y-4">
-                    <h3 className="text-lg font-bold text-zinc-200">模擬結果</h3>
+                    <h3 className="text-lg font-bold text-zinc-200">
+                      模擬結果摘要 ({allSimulations.length} 次模擬)
+                    </h3>
+
+                    {/* Statistics Bar */}
+                    <div className="flex flex-wrap gap-4 p-4 bg-zinc-900/50 rounded-lg text-sm">
+                      <div className="flex items-center gap-2">
+                        <span className="text-zinc-400">成功率:</span>
+                        <span className="font-bold text-emerald-400">{calculateSuccessRate(allSimulations)}%</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-zinc-400">中位數:</span>
+                        <span className="font-bold text-zinc-300">{formatCurrency(calculateMedianFinal(allSimulations))}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-zinc-400">最佳:</span>
+                        <span className="font-bold text-emerald-300">{formatCurrency(getBestCase(allSimulations))}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-zinc-400">最差:</span>
+                        <span className="font-bold text-red-300">{formatCurrency(getWorstCase(allSimulations))}</span>
+                      </div>
+                    </div>
+
+                    {/* Simulation Grid */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2 max-h-96 overflow-y-auto p-2 bg-zinc-950/50 rounded-lg">
+                      {allSimulations.map((sim, index) => {
+                        const finalValue = sim[sim.length - 1]?.portfolioValue || 0;
+                        const isSuccess = finalValue > 0;
+                        const isSelected = selectedSimIndex === index;
+
+                        return (
+                          <button
+                            key={index}
+                            onClick={() => setSelectedSimIndex(index)}
+                            className={`p-3 rounded-lg text-left transition-all ${isSelected
+                              ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-900/50'
+                              : 'bg-zinc-800 hover:bg-zinc-700'
+                              }`}
+                          >
+                            <div className="flex justify-between items-center mb-1">
+                              <span className="text-xs font-mono opacity-75">模擬 #{index + 1}</span>
+                              <span className={`text-sm ${isSuccess ? 'text-emerald-300' : 'text-red-400'}`}>
+                                {isSuccess ? '✓' : '✗'}
+                              </span>
+                            </div>
+                            <div className="text-base font-bold">
+                              {formatCurrency(finalValue)}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Detail View for Selected Simulation */}
+                {selectedSimIndex !== null && allSimulations[selectedSimIndex] && (
+                  <div className="border-t border-zinc-800 pt-6 mt-6 space-y-4">
+                    <div className="flex justify-between items-center">
+                      <h3 className="text-lg font-bold text-zinc-200">
+                        模擬 #{selectedSimIndex + 1} 詳細結果
+                      </h3>
+                      <button
+                        onClick={() => setSelectedSimIndex(null)}
+                        className="text-zinc-400 hover:text-white transition-colors px-3 py-1 rounded hover:bg-zinc-800"
+                      >
+                        關閉 ✕
+                      </button>
+                    </div>
+
                     <div className="overflow-x-auto">
                       <table className="w-full text-sm">
                         <thead className="bg-zinc-900/50 text-zinc-400 uppercase text-xs border-b border-zinc-800">
@@ -924,17 +1026,29 @@ const AssetCalculator = () => {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-zinc-800/50">
-                          {withdrawalResults.map((row) => (
+                          {allSimulations[selectedSimIndex].map((row: WithdrawalResult) => (
                             <tr key={row.year} className="hover:bg-zinc-900/50 transition-colors">
                               <td className="px-4 py-3 font-mono text-zinc-400">Y{row.year}</td>
                               <td className="px-4 py-3 text-zinc-300">{formatCurrency(row.portfolioValue)}</td>
                               <td className="px-4 py-3 text-purple-400">{formatCurrency(row.withdrawalAmount)}</td>
                               <td className="px-4 py-3 text-zinc-400">{row.withdrawalRate.toFixed(2)}%</td>
-                              <td className="px-4 py-3">{row.inflationAdjusted ? <span className="text-emerald-400">✓</span> : <span className="text-zinc-600">-</span>}</td>
                               <td className="px-4 py-3">
-                                {row.guardrailTriggered === 'upper' && <span className="text-red-400 text-xs font-semibold">↓ 減少10%</span>}
-                                {row.guardrailTriggered === 'lower' && <span className="text-emerald-400 text-xs font-semibold">↑ 增加10%</span>}
-                                {!row.guardrailTriggered && <span className="text-zinc-600">-</span>}
+                                {row.inflationAdjusted ? (
+                                  <span className="text-emerald-400">✓</span>
+                                ) : (
+                                  <span className="text-zinc-600">-</span>
+                                )}
+                              </td>
+                              <td className="px-4 py-3">
+                                {row.guardrailTriggered === 'upper' && (
+                                  <span className="text-red-400 text-xs font-semibold">↓ 減少10%</span>
+                                )}
+                                {row.guardrailTriggered === 'lower' && (
+                                  <span className="text-emerald-400 text-xs font-semibold">↑ 增加10%</span>
+                                )}
+                                {!row.guardrailTriggered && (
+                                  <span className="text-zinc-600">-</span>
+                                )}
                               </td>
                             </tr>
                           ))}
