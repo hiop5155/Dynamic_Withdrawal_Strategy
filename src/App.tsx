@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import {
   Plus,
   Trash2,
@@ -17,7 +17,6 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip,
-  ResponsiveContainer
 } from 'recharts';
 
 // --- Types ---
@@ -52,12 +51,9 @@ interface YearlyResult {
 }
 
 // --- Constants ---
+
 const PRICE_DATABASE: Record<string, number> = {
-  '00929': 20.12, '00929.TW': 20.12,
-  '00675L': 183.9, '00675L.TW': 183.9,
-  '00937B': 15.95, '00937B.TW': 15.95,
-  '0050': 74.2, '0050.TW': 74.2,
-  '2887': 22.85, '2887.TW': 22.85,
+
 };
 
 // --- Helper Components ---
@@ -83,24 +79,40 @@ const Badge = ({ children, variant = 'default' }: { children: React.ReactNode; v
 const AssetCalculator = () => {
   // --- State ---
   const [portfolio, setPortfolio] = useState<StockItem[]>([
-    { id: '1', ticker: '00929', name: '復華台灣科技優息', quantity: 175245, price: 19.78 },
-    { id: '2', ticker: '00675L', name: '富邦臺灣加權正2', quantity: 1070, price: 187.1 },
-    { id: '3', ticker: '00937B', name: '群益ESG投等債', quantity: 20000, price: 15.95 },
-    { id: '4', ticker: '0050', name: '元大台灣50', quantity: 2040, price: 198.5 },
-    { id: '5', ticker: '2887', name: '台新新光金', quantity: 3000, price: 22.20 },
   ]);
 
   const [projection, setProjection] = useState<ProjectionParams>({
     initialReturnRate: 6, // For existing portfolio (Conservative/Dividend)
     years: 10,
     targets: [
-      { id: '1', name: '高槓桿策略', monthlyAmount: 24300, returnRate: 20 },
+      { id: '1', name: '', monthlyAmount: 3000, returnRate: 20 },
     ]
   });
 
   const [tickerInput, setTickerInput] = useState('');
   const [qtyInput, setQtyInput] = useState('');
   const [isFetching, setIsFetching] = useState(false);
+
+  // --- Chart Resize Logic ---
+  const chartContainerRef = useRef<HTMLDivElement>(null);
+  const [chartSize, setChartSize] = useState({ width: 0, height: 0 });
+
+  useEffect(() => {
+    const observeTarget = chartContainerRef.current;
+    if (!observeTarget) return;
+
+    const resizeObserver = new ResizeObserver((entries) => {
+      for (let entry of entries) {
+        const { width, height } = entry.contentRect;
+        if (width > 0 && height > 0) {
+          setChartSize({ width, height });
+        }
+      }
+    });
+
+    resizeObserver.observe(observeTarget);
+    return () => resizeObserver.disconnect();
+  }, []);
 
   const SUFFIX_OVERRIDES: Record<string, string> = {
     '00937B': '.TWO',
@@ -325,11 +337,11 @@ const AssetCalculator = () => {
         <header className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6 border-b border-zinc-800 pb-8">
           <div className="space-y-2">
             <h1 className="text-4xl md:text-5xl font-bold bg-gradient-to-r from-emerald-400 via-teal-200 to-cyan-400 bg-clip-text text-transparent tracking-tight">
-              資產槓桿加速器
+              資產計算器
             </h1>
             <p className="text-zinc-400 flex items-center gap-2">
               <TrendingUp className="w-4 h-4 text-emerald-500" />
-              高槓桿策略模擬
+              策略模擬
               <span className="text-zinc-600">|</span>
               動態目標追蹤
             </p>
@@ -369,11 +381,11 @@ const AssetCalculator = () => {
 
               {/* Add Input */}
               <div className="p-4 bg-zinc-900/30 border-b border-zinc-800">
-                <div className="flex gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <input
                     type="text"
-                    placeholder="代號 (如 2330)"
-                    className="flex-1 bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 transition-all"
+                    placeholder="代號"
+                    className="flex-[2] min-w-[120px] bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 transition-all"
                     value={tickerInput}
                     onChange={(e) => setTickerInput(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && handleAddStock()}
@@ -381,7 +393,7 @@ const AssetCalculator = () => {
                   <input
                     type="number"
                     placeholder="股數"
-                    className="w-24 bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 transition-all"
+                    className="flex-1 min-w-[80px] bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 transition-all"
                     value={qtyInput}
                     onChange={(e) => setQtyInput(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && handleAddStock()}
@@ -389,7 +401,7 @@ const AssetCalculator = () => {
                   <button
                     onClick={handleAddStock}
                     disabled={isFetching}
-                    className="bg-emerald-600/90 hover:bg-emerald-500 text-white p-2.5 rounded-lg transition-colors shadow-lg shadow-emerald-900/20 active:scale-95"
+                    className="shrink-0 bg-emerald-600/90 hover:bg-emerald-500 text-white p-2 rounded-lg transition-colors shadow-lg shadow-emerald-900/20 active:scale-95"
                   >
                     <Plus className="w-5 h-5" />
                   </button>
@@ -594,9 +606,15 @@ const AssetCalculator = () => {
                 </div>
               </div>
 
-              <div className="h-[350px] w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={projectionData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+              {/* Manual ResizeObserver Pattern */}
+              <div ref={chartContainerRef} className="h-[350px] w-full relative">
+                {chartSize.width > 0 && chartSize.height > 0 ? (
+                  <AreaChart
+                    width={chartSize.width}
+                    height={chartSize.height}
+                    data={projectionData}
+                    margin={{ top: 10, right: 10, left: 0, bottom: 0 }}
+                  >
                     <defs>
                       <linearGradient id="colorTotal" x1="0" y1="0" x2="0" y2="1">
                         <stop offset="5%" stopColor="#10b981" stopOpacity={0.2} />
@@ -647,7 +665,11 @@ const AssetCalculator = () => {
                       activeDot={{ r: 4, strokeWidth: 0 }}
                     />
                   </AreaChart>
-                </ResponsiveContainer>
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center text-zinc-600">
+                    載入圖表...
+                  </div>
+                )}
               </div>
             </Card>
 
