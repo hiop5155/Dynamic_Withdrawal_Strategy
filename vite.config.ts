@@ -18,4 +18,17 @@ export default defineConfig({
       },
     },
   },
+  build: {
+    // SEO: Code splitting for better caching and faster initial load
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'react-vendor': ['react', 'react-dom'],
+          'charts': ['recharts'],
+          'icons': ['lucide-react']
+        }
+      }
+    },
+    chunkSizeWarningLimit: 600
+  }
 })

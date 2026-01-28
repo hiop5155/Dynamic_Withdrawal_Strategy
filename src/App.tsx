@@ -47,7 +47,25 @@ interface YearlyResult {
   principal: number;
   interest: number;
   total: number;
-  monthlyIncome?: number;
+}
+
+interface WithdrawalParams {
+  initialRate: number;
+  upperGuardrail: number;
+  lowerGuardrail: number;
+  expectedAPY: number;
+  volatility: number;
+  simulations: number;
+  years: number;
+}
+
+interface WithdrawalResult {
+  year: number;
+  portfolioValue: number;
+  withdrawalAmount: number;
+  withdrawalRate: number;
+  inflationAdjusted: boolean;
+  guardrailTriggered: 'upper' | 'lower' | null;
 }
 
 // --- Constants ---
@@ -78,20 +96,54 @@ const Badge = ({ children, variant = 'default' }: { children: React.ReactNode; v
 
 const AssetCalculator = () => {
   // --- State ---
-  const [portfolio, setPortfolio] = useState<StockItem[]>([
-  ]);
+  const [portfolio, setPortfolio] = useState<StockItem[]>(() => {
+    const saved = localStorage.getItem('portfolio');
+    return saved ? JSON.parse(saved) : [];
+  });
 
-  const [projection, setProjection] = useState<ProjectionParams>({
-    initialReturnRate: 6, // For existing portfolio (Conservative/Dividend)
-    years: 10,
-    targets: [
-      { id: '1', name: '', monthlyAmount: 3000, returnRate: 20 },
-    ]
+  const [projection, setProjection] = useState<ProjectionParams>(() => {
+    const saved = localStorage.getItem('projection');
+    return saved ? JSON.parse(saved) : {
+      initialReturnRate: 6,
+      years: 10,
+      targets: [
+        { id: '1', name: '', monthlyAmount: 3000, returnRate: 20 },
+      ]
+    };
   });
 
   const [tickerInput, setTickerInput] = useState('');
   const [qtyInput, setQtyInput] = useState('');
   const [isFetching, setIsFetching] = useState(false);
+
+  // --- Withdrawal Simulation State ---
+  const [withdrawalParams, setWithdrawalParams] = useState<WithdrawalParams>(() => {
+    const saved = localStorage.getItem('withdrawalParams');
+    return saved ? JSON.parse(saved) : {
+      initialRate: 4,
+      upperGuardrail: 20,
+      lowerGuardrail: 20,
+      expectedAPY: 7,
+      volatility: 15,
+      simulations: 1000,
+      years: 30
+    };
+  });
+  const [withdrawalResults, setWithdrawalResults] = useState<WithdrawalResult[]>([]);
+  const [showWithdrawalSim, setShowWithdrawalSim] = useState(false);
+
+  // --- Save to localStorage on state changes ---
+  useEffect(() => {
+    localStorage.setItem('portfolio', JSON.stringify(portfolio));
+  }, [portfolio]);
+
+  useEffect(() => {
+    localStorage.setItem('projection', JSON.stringify(projection));
+  }, [projection]);
+
+  useEffect(() => {
+    localStorage.setItem('withdrawalParams', JSON.stringify(withdrawalParams));
+  }, [withdrawalParams]);
 
   // --- Chart Resize Logic ---
   const chartContainerRef = useRef<HTMLDivElement>(null);
@@ -235,6 +287,12 @@ const AssetCalculator = () => {
     ));
   };
 
+  const handleQuantityChange = (id: string, newQuantity: string) => {
+    setPortfolio(portfolio.map(item =>
+      item.id === id ? { ...item, quantity: Number(newQuantity) } : item
+    ));
+  };
+
   // --- Multi-Target Handlers ---
   const addTarget = () => {
     const newTarget: InvestmentTarget = {
@@ -308,8 +366,7 @@ const AssetCalculator = () => {
         year: y,
         principal: Math.round(totalPrincipal),
         interest: Math.round(totalValue - totalPrincipal),
-        total: Math.round(totalValue),
-        monthlyIncome: Math.round((totalValue * 0.04) / 12)
+        total: Math.round(totalValue)
       });
     }
     return data;
@@ -318,6 +375,92 @@ const AssetCalculator = () => {
   const formatCurrency = (val: number) => {
     return new Intl.NumberFormat('zh-TW', { style: 'currency', currency: 'TWD', maximumFractionDigits: 0 }).format(val);
   };
+
+  // --- GK Withdrawal Simulation ---
+  const generateRandomReturn = (mean: number, stdDev: number): number => {
+    const u1 = Math.random();
+    const u2 = Math.random();
+    const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+    return mean + z * stdDev;
+  };
+
+  const runGKSimulation = (
+    startingValue: number,
+    params: WithdrawalParams,
+    years: number
+  ): WithdrawalResult[] => {
+    const results: WithdrawalResult[] = [];
+
+    let portfolioValue = startingValue;
+    let withdrawalAmount = startingValue * (params.initialRate / 100);
+    const initialWithdrawalRate = params.initialRate / 100;
+
+    for (let year = 1; year <= years; year++) {
+      // 1. Deduct withdrawal at year start
+      portfolioValue -= withdrawalAmount;
+
+      // 2. Apply random market return
+      const randomReturn = generateRandomReturn(
+        params.expectedAPY / 100,
+        params.volatility / 100
+      );
+      const previousValue = portfolioValue;
+      portfolioValue *= (1 + randomReturn);
+      const portfolioGained = portfolioValue > previousValue;
+
+      // 3. Calculate current withdrawal rate
+      const currentRate = withdrawalAmount / portfolioValue;
+
+      // 4. Apply GK Rules for NEXT year's withdrawal
+      let nextWithdrawal = withdrawalAmount;
+      let guardrailTriggered: 'upper' | 'lower' | null = null;
+      let inflationAdjusted = false;
+
+      // Capital Preservation Rule (Upper Guardrail)
+      if (currentRate > initialWithdrawalRate * (1 + params.upperGuardrail / 100)) {
+        nextWithdrawal *= 0.9; // Reduce 10%
+        guardrailTriggered = 'upper';
+      }
+      // Prosperity Rule (Lower Guardrail)
+      else if (currentRate < initialWithdrawalRate * (1 - params.lowerGuardrail / 100)) {
+        nextWithdrawal *= 1.1; // Increase 10%
+        guardrailTriggered = 'lower';
+      }
+      // Inflation Rule
+      else if (portfolioGained) {
+        nextWithdrawal *= 1.03; // 3% inflation adjustment
+        inflationAdjusted = true;
+      }
+
+      results.push({
+        year,
+        portfolioValue: Math.max(0, portfolioValue),
+        withdrawalAmount,
+        withdrawalRate: currentRate * 100,
+        inflationAdjusted,
+        guardrailTriggered,
+      });
+
+      withdrawalAmount = nextWithdrawal;
+
+      // Stop if portfolio depleted
+      if (portfolioValue <= 0) break;
+    }
+
+    return results;
+  };
+
+  const handleRunSimulation = () => {
+    // Use current total value if no accumulation years, otherwise use final projection value
+    const startingValue = projection.years === 0
+      ? currentTotalValue
+      : (projectionData[projectionData.length - 1]?.total || currentTotalValue);
+
+    const results = runGKSimulation(startingValue, withdrawalParams, withdrawalParams.years);
+    setWithdrawalResults(results);
+    setShowWithdrawalSim(true);
+  };
+
 
   // Calculate total monthly contribution for display
   const totalMonthlyContribution = projection.targets.reduce((sum, t) => sum + t.monthlyAmount, 0);
@@ -331,7 +474,7 @@ const AssetCalculator = () => {
         <div className="absolute bottom-0 right-1/4 w-96 h-96 bg-purple-900/10 rounded-full blur-[128px]" />
       </div>
 
-      <div className="relative z-10 max-w-7xl mx-auto p-4 md:p-8 space-y-8">
+      <main className="relative z-10 max-w-7xl mx-auto p-4 md:p-8 space-y-8" role="main">
 
         {/* Header */}
         <header className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6 border-b border-zinc-800 pb-8">
@@ -420,9 +563,15 @@ const AssetCalculator = () => {
                         <span className="font-bold text-zinc-100">{item.ticker}</span>
                         {item.isEstimate && <Badge variant="outline">EST</Badge>}
                       </div>
-                      <span className="text-xs text-zinc-500 font-mono tracking-wide">
-                        {item.quantity.toLocaleString()} 股
-                      </span>
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="number"
+                          className="w-20 bg-transparent text-xs text-zinc-400 hover:text-zinc-100 border-b border-transparent hover:border-zinc-700 focus:border-emerald-500 outline-none transition-colors py-0.5 font-mono"
+                          value={item.quantity}
+                          onChange={(e) => handleQuantityChange(item.id, e.target.value)}
+                        />
+                        <span className="text-xs text-zinc-500">股</span>
+                      </div>
                     </div>
 
                     <div className="flex items-center gap-4">
@@ -686,7 +835,6 @@ const AssetCalculator = () => {
                       <th className="px-6 py-3 font-medium">投入本金</th>
                       <th className="px-6 py-3 font-medium">槓桿收益</th>
                       <th className="px-6 py-3 font-medium text-emerald-500">總資產</th>
-                      <th className="px-6 py-3 font-medium text-zinc-400">4% 提領 (月)</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-800/50">
@@ -698,7 +846,6 @@ const AssetCalculator = () => {
                         <td className="px-6 py-4 text-zinc-400">{formatCurrency(row.principal)}</td>
                         <td className="px-6 py-4 text-purple-400">+{formatCurrency(row.interest)}</td>
                         <td className="px-6 py-4 font-bold text-emerald-400 bg-emerald-950/10">{formatCurrency(row.total)}</td>
-                        <td className="px-6 py-4 text-zinc-500">{formatCurrency(row.monthlyIncome || 0)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -706,9 +853,102 @@ const AssetCalculator = () => {
               </div>
             </Card>
 
+            {/* GK Withdrawal Simulation Section */}
+            <Card className="mt-8">
+              <div className="p-6 border-b border-zinc-800">
+                <h2 className="text-2xl font-bold flex items-center gap-3 text-zinc-100">
+                  <DollarSign className="w-7 h-7 text-purple-400" />
+                  退休後動態提領模擬 (GK法則)
+                </h2>
+                <p className="text-sm text-zinc-400 mt-2">
+                  基於 Guyton-Klinger 動態提領策略，模擬退休後資產提領與護欄調整
+                </p>
+              </div>
+
+              <div className="p-6 space-y-6">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-medium text-zinc-500 uppercase tracking-wider">初始提領率 (%)</label>
+                    <input type="number" value={withdrawalParams.initialRate} onChange={(e) => setWithdrawalParams({ ...withdrawalParams, initialRate: Number(e.target.value) })} className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-zinc-300 font-bold outline-none focus:ring-2 focus:ring-purple-500/30 focus:border-purple-500/50 transition-all text-center" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-medium text-zinc-500 uppercase tracking-wider">上護欄 (%)</label>
+                    <input type="number" value={withdrawalParams.upperGuardrail} onChange={(e) => setWithdrawalParams({ ...withdrawalParams, upperGuardrail: Number(e.target.value) })} className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-zinc-300 font-bold outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-500/50 transition-all text-center" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-medium text-zinc-500 uppercase tracking-wider">下護欄 (%)</label>
+                    <input type="number" value={withdrawalParams.lowerGuardrail} onChange={(e) => setWithdrawalParams({ ...withdrawalParams, lowerGuardrail: Number(e.target.value) })} className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-zinc-300 font-bold outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500/50 transition-all text-center" />
+                  </div>
+                </div>
+
+                <div className="border-t border-zinc-800 pt-6">
+                  <h3 className="text-sm font-semibold text-zinc-400 mb-4 uppercase tracking-wider">Monte Carlo 模擬參數</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium text-zinc-500 uppercase tracking-wider">退休年數</label>
+                      <input type="number" value={withdrawalParams.years} onChange={(e) => setWithdrawalParams({ ...withdrawalParams, years: Number(e.target.value) })} className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-zinc-300 font-bold outline-none focus:ring-2 focus:ring-zinc-500/30 focus:border-zinc-500/50 transition-all text-center" />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium text-zinc-500 uppercase tracking-wider">預期年化報酬 (%)</label>
+                      <input type="number" value={withdrawalParams.expectedAPY} onChange={(e) => setWithdrawalParams({ ...withdrawalParams, expectedAPY: Number(e.target.value) })} className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-zinc-300 font-bold outline-none focus:ring-2 focus:ring-zinc-500/30 focus:border-zinc-500/50 transition-all text-center" />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium text-zinc-500 uppercase tracking-wider">波動率 (%)</label>
+                      <input type="number" value={withdrawalParams.volatility} onChange={(e) => setWithdrawalParams({ ...withdrawalParams, volatility: Number(e.target.value) })} className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-zinc-300 font-bold outline-none focus:ring-2 focus:ring-zinc-500/30 focus:border-zinc-500/50 transition-all text-center" />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium text-zinc-500 uppercase tracking-wider">模擬次數</label>
+                      <input type="number" value={withdrawalParams.simulations} onChange={(e) => setWithdrawalParams({ ...withdrawalParams, simulations: Number(e.target.value) })} className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-zinc-300 font-bold outline-none focus:ring-2 focus:ring-zinc-500/30 focus:border-zinc-500/50 transition-all text-center" />
+                    </div>
+                  </div>
+                </div>
+
+                <button onClick={handleRunSimulation} className="w-full bg-gradient-to-r from-purple-600 to-purple-500 hover:from-purple-500 hover:to-purple-400 text-white font-bold py-3 rounded-lg transition-all shadow-lg shadow-purple-900/30 active:scale-98 flex items-center justify-center gap-2">
+                  <BarChart3 className="w-5 h-5" />
+                  執行模擬
+                </button>
+
+                {showWithdrawalSim && withdrawalResults.length > 0 && (
+                  <div className="border-t border-zinc-800 pt-6 space-y-4">
+                    <h3 className="text-lg font-bold text-zinc-200">模擬結果</h3>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead className="bg-zinc-900/50 text-zinc-400 uppercase text-xs border-b border-zinc-800">
+                          <tr>
+                            <th className="px-4 py-3 font-medium">年份</th>
+                            <th className="px-4 py-3 font-medium">資產餘額</th>
+                            <th className="px-4 py-3 font-medium">提領金額</th>
+                            <th className="px-4 py-3 font-medium">提領率</th>
+                            <th className="px-4 py-3 font-medium">通膨調整</th>
+                            <th className="px-4 py-3 font-medium">護欄觸發</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-zinc-800/50">
+                          {withdrawalResults.map((row) => (
+                            <tr key={row.year} className="hover:bg-zinc-900/50 transition-colors">
+                              <td className="px-4 py-3 font-mono text-zinc-400">Y{row.year}</td>
+                              <td className="px-4 py-3 text-zinc-300">{formatCurrency(row.portfolioValue)}</td>
+                              <td className="px-4 py-3 text-purple-400">{formatCurrency(row.withdrawalAmount)}</td>
+                              <td className="px-4 py-3 text-zinc-400">{row.withdrawalRate.toFixed(2)}%</td>
+                              <td className="px-4 py-3">{row.inflationAdjusted ? <span className="text-emerald-400">✓</span> : <span className="text-zinc-600">-</span>}</td>
+                              <td className="px-4 py-3">
+                                {row.guardrailTriggered === 'upper' && <span className="text-red-400 text-xs font-semibold">↓ 減少10%</span>}
+                                {row.guardrailTriggered === 'lower' && <span className="text-emerald-400 text-xs font-semibold">↑ 增加10%</span>}
+                                {!row.guardrailTriggered && <span className="text-zinc-600">-</span>}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </Card>
+
           </div>
         </div>
-      </div>
+      </main>
     </div>
   );
 };
