@@ -1039,6 +1039,12 @@ const AssetCalculator = () => {
                   記帳助手 App
                 </a>
                 <a
+                  href="/calc"
+                  className="text-zinc-400 hover:text-emerald-400 transition-colors"
+                >
+                  資產計算器
+                </a>
+                <a
                   href="/blog"
                   className="text-zinc-400 hover:text-emerald-400 transition-colors"
                 >
