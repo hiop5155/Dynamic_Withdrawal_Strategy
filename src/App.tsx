@@ -1054,7 +1054,7 @@ const AssetCalculator = () => {
 
               {/* Copyright */}
               <div className="text-center text-sm text-zinc-500">
-                <p>© 2026 記帳助手 Money Tracker.</p>
+                <p>© {new Date().getFullYear()} 記帳助手 Money Tracker.</p>
                 <p className="mt-1">All rights reserved.</p>
               </div>
             </div>

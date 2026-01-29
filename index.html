@@ -5,13 +5,23 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
-  <!-- Google Analytics -->
-  <script async src="https://www.googletagmanager.com/gtag/js?id=G-J6Q197M3NN"></script>
+  <!-- Delayed Google Analytics - loads after page renders -->
   <script>
-    window.dataLayer = window.dataLayer || [];
-    function gtag() { dataLayer.push(arguments); }
-    gtag('js', new Date());
-    gtag('config', 'G-J6Q197M3NN');
+    window.addEventListener('load', function () {
+      setTimeout(function () {
+        var gaScript = document.createElement('script');
+        gaScript.async = true;
+        gaScript.src = 'https://www.googletagmanager.com/gtag/js?id=G-J6Q197M3NN';
+        document.head.appendChild(gaScript);
+
+        gaScript.onload = function () {
+          window.dataLayer = window.dataLayer || [];
+          function gtag() { dataLayer.push(arguments); }
+          gtag('js', new Date());
+          gtag('config', 'G-J6Q197M3NN');
+        };
+      }, 1000);
+    });
   </script>
 
   <!-- Primary Meta Tags -->
