@@ -8,7 +8,9 @@ import {
   Info,
   RefreshCw,
   Wallet,
-  Coins
+  Coins,
+  HelpCircle,
+  X
 } from 'lucide-react';
 import {
   AreaChart,
@@ -64,15 +66,10 @@ interface WithdrawalResult {
   portfolioValue: number;
   withdrawalAmount: number;
   withdrawalRate: number;
+  returnRate: number;
   inflationAdjusted: boolean;
   guardrailTriggered: 'upper' | 'lower' | null;
 }
-
-// --- Constants ---
-
-const PRICE_DATABASE: Record<string, number> = {
-
-};
 
 // --- Helper Components ---
 const Card = ({ children, className = '' }: { children: React.ReactNode; className?: string }) => (
@@ -132,6 +129,7 @@ const AssetCalculator = () => {
   const [allSimulations, setAllSimulations] = useState<WithdrawalResult[][]>([]);
   const [selectedSimIndex, setSelectedSimIndex] = useState<number | null>(null);
   const [showWithdrawalSim, setShowWithdrawalSim] = useState(false);
+  const [showGKModal, setShowGKModal] = useState(false);
 
   // --- Save to localStorage on state changes ---
   useEffect(() => {
@@ -167,80 +165,30 @@ const AssetCalculator = () => {
     return () => resizeObserver.disconnect();
   }, []);
 
-  const SUFFIX_OVERRIDES: Record<string, string> = {
-    '00937B': '.TWO',
-    '00675L': '.TW',
-    '00929': '.TW',
-    // Add others if needed
-  };
-
-  // --- Logic ---
+  // --- Stock Price Fetching (via Backend API) ---
   const getStockPrice = async (ticker: string): Promise<{ price: number, isEstimate: boolean }> => {
     const cleanTicker = ticker.trim().toUpperCase();
 
-    // Determine the best suffix strategy
-    let primarySymbol = cleanTicker.includes('.') ? cleanTicker : `${cleanTicker}.TW`;
-    let secondarySymbol: string | null = null;
+    try {
+      const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+      const response = await fetch(`${API_URL}/api/stocks/price/${cleanTicker}`);
 
-    if (!cleanTicker.includes('.')) {
-      if (SUFFIX_OVERRIDES[cleanTicker]) {
-        primarySymbol = `${cleanTicker}${SUFFIX_OVERRIDES[cleanTicker]}`;
-      } else {
-        // Default strategy: Try TW, then TWO
-        primarySymbol = `${cleanTicker}.TW`;
-        secondarySymbol = `${cleanTicker}.TWO`;
+      if (!response.ok) {
+        throw new Error(`API error: ${response.status}`);
       }
+
+      const data = await response.json();
+      return {
+        price: data.price,
+        isEstimate: data.isEstimate,
+      };
+    } catch (error) {
+      console.error('Failed to fetch stock price:', error);
+      // Ultimate fallback
+      return { price: 100, isEstimate: true };
     }
-
-    const tryFetch = async (sym: string) => {
-      try {
-        // [FIX]: Switch from allorigins to corsproxy.io for better Yahoo compatibility
-        const targetUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${sym}?interval=1d&range=1d`;
-
-        // 使用 corsproxy.io，它目前對 Yahoo Finance 的支援度較好
-        const fetchUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
-
-        const response = await fetch(fetchUrl);
-
-        // Handle specific HTTP errors
-        if (response.status === 404) return null;
-        if (response.status === 429) {
-          console.warn(`Rate Limited (429) for ${sym}`);
-          return null;
-        }
-        if (!response.ok) throw new Error(`Status ${response.status}`);
-
-        const data = await response.json();
-        const price = data?.chart?.result?.[0]?.meta?.regularMarketPrice;
-
-        if (typeof price === 'number') return price;
-      } catch (e) {
-        // Silent fail allows fallback to database
-        console.warn(`Fetch failed for ${sym} via proxy:`, e);
-      }
-      return null;
-    };
-
-    // 1. Try Primary
-    let livePrice = await tryFetch(primarySymbol);
-
-    // 2. Try Secondary (if exists and primary failed)
-    if (livePrice === null && secondarySymbol) {
-      // Small delay before retry to be nice
-      await new Promise(r => setTimeout(r, 500));
-      livePrice = await tryFetch(secondarySymbol);
-    }
-
-    if (livePrice !== null) return { price: livePrice, isEstimate: false };
-
-    // 3. Fallback to Database
-    const keysToCheck = [cleanTicker, `${cleanTicker}.TW`, `${cleanTicker}.TWO`];
-    for (const key of keysToCheck) {
-      if (PRICE_DATABASE[key]) return { price: PRICE_DATABASE[key], isEstimate: true };
-    }
-
-    return { price: 0, isEstimate: true };
   };
+
 
   const updateAllPrices = async () => {
     setIsFetching(true);
@@ -438,6 +386,7 @@ const AssetCalculator = () => {
         portfolioValue: Math.max(0, portfolioValue),
         withdrawalAmount,
         withdrawalRate: currentRate * 100,
+        returnRate: randomReturn * 100, // Annual market return as percentage
         inflationAdjusted,
         guardrailTriggered,
       });
@@ -619,8 +568,10 @@ const AssetCalculator = () => {
                         </div>
                       </div>
                       <button
+                        type="button"
                         onClick={() => handleRemoveStock(item.id)}
-                        className="text-zinc-600 hover:text-red-400 opacity-0 group-hover:opacity-100 p-1.5 hover:bg-red-950/30 rounded transition-all"
+                        className="p-2 rounded-lg bg-red-500/20 hover:bg-red-500/30 text-red-400 transition-colors"
+                        aria-label="Remove stock"
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
@@ -757,7 +708,7 @@ const AssetCalculator = () => {
               {[
                 { label: `${projection.years} 年後總資產`, value: projectionData[projectionData.length - 1].total, color: 'text-emerald-400', subColor: 'bg-emerald-400/10' },
                 { label: '投入本金總額', value: projectionData[projectionData.length - 1].principal, color: 'text-zinc-300', subColor: 'bg-zinc-100/10' },
-                { label: '複利/槓桿獲利', value: projectionData[projectionData.length - 1].interest, color: 'text-purple-400', subColor: 'bg-purple-400/10' }
+                { label: '複利', value: projectionData[projectionData.length - 1].interest, color: 'text-purple-400', subColor: 'bg-purple-400/10' }
               ].map((stat, i) => (
                 <Card key={i} className="p-5 flex flex-col justify-between hover:border-zinc-700 transition-colors">
                   <span className="text-zinc-500 text-xs font-medium uppercase tracking-wider">{stat.label}</span>
@@ -888,10 +839,18 @@ const AssetCalculator = () => {
             {/* GK Withdrawal Simulation Section */}
             <Card className="mt-8">
               <div className="p-6 border-b border-zinc-800">
-                <h2 className="text-2xl font-bold flex items-center gap-3 text-zinc-100">
-                  <DollarSign className="w-7 h-7 text-purple-400" />
-                  退休後動態提領模擬 (GK法則)
-                </h2>
+                <div className="flex items-center gap-2 mb-4">
+                  <h2 className="text-xl font-bold text-zinc-200">
+                    退休後動態提領模擬 (GK法則)
+                  </h2>
+                  <button
+                    onClick={() => setShowGKModal(true)}
+                    className="p-1.5 rounded-lg hover:bg-zinc-800 text-zinc-400 hover:text-emerald-400 transition-colors"
+                    aria-label="GK法則說明"
+                  >
+                    <HelpCircle className="w-5 h-5" />
+                  </button>
+                </div>
                 <p className="text-sm text-zinc-400 mt-2">
                   基於 Guyton-Klinger 動態提領策略，模擬退休後資產提領與護欄調整
                 </p>
@@ -1021,6 +980,7 @@ const AssetCalculator = () => {
                             <th className="px-4 py-3 font-medium">資產餘額</th>
                             <th className="px-4 py-3 font-medium">提領金額</th>
                             <th className="px-4 py-3 font-medium">提領率</th>
+                            <th className="px-4 py-3 font-medium">模擬回報率</th>
                             <th className="px-4 py-3 font-medium">通膨調整</th>
                             <th className="px-4 py-3 font-medium">護欄觸發</th>
                           </tr>
@@ -1032,6 +992,9 @@ const AssetCalculator = () => {
                               <td className="px-4 py-3 text-zinc-300">{formatCurrency(row.portfolioValue)}</td>
                               <td className="px-4 py-3 text-purple-400">{formatCurrency(row.withdrawalAmount)}</td>
                               <td className="px-4 py-3 text-zinc-400">{row.withdrawalRate.toFixed(2)}%</td>
+                              <td className={`px-4 py-3 font-semibold ${row.returnRate >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                                {row.returnRate >= 0 ? '+' : ''}{row.returnRate.toFixed(2)}%
+                              </td>
                               <td className="px-4 py-3">
                                 {row.inflationAdjusted ? (
                                   <span className="text-emerald-400">✓</span>
@@ -1062,7 +1025,180 @@ const AssetCalculator = () => {
 
           </div>
         </div>
+
+        {/* Footer */}
+        <footer className="mt-16 border-t border-zinc-800 pt-8 pb-12">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="flex flex-col items-center gap-6">
+              {/* Links */}
+              <div className="flex flex-wrap justify-center gap-x-8 gap-y-2 text-sm">
+                <a
+                  href="/"
+                  className="text-zinc-400 hover:text-emerald-400 transition-colors"
+                >
+                  記帳助手 App
+                </a>
+                <a
+                  href="/blog"
+                  className="text-zinc-400 hover:text-emerald-400 transition-colors"
+                >
+                  理財知識庫
+                </a>
+                <a
+                  href="/blog/privacy.html"
+                  className="text-zinc-400 hover:text-emerald-400 transition-colors"
+                >
+                  隱私權政策
+                </a>
+              </div>
+
+              {/* Copyright */}
+              <div className="text-center text-sm text-zinc-500">
+                <p>© 2026 記帳助手 Money Tracker.</p>
+                <p className="mt-1">All rights reserved.</p>
+              </div>
+            </div>
+          </div>
+        </footer>
       </main>
+
+      {/* GK Rule Explanation Modal */}
+      {showGKModal && (
+        <div
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          onClick={() => setShowGKModal(false)}
+        >
+          <div
+            className="bg-zinc-900 border border-zinc-800 rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="sticky top-0 bg-zinc-900 border-b border-zinc-800 p-6 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-purple-500/20 rounded-lg">
+                  <DollarSign className="w-6 h-6 text-purple-400" />
+                </div>
+                <h3 className="text-2xl font-bold text-zinc-100">Guyton-Klinger 動態提領法則</h3>
+              </div>
+              <button
+                onClick={() => setShowGKModal(false)}
+                className="p-2 hover:bg-zinc-800 rounded-lg transition-colors text-zinc-400 hover:text-white"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="p-6 space-y-6">
+              {/* Overview */}
+              <div>
+                <h4 className="text-lg font-semibold text-emerald-400 mb-2">什麼是 GK 法則？</h4>
+                <p className="text-zinc-300 leading-relaxed">
+                  Guyton-Klinger 法則是一種<strong className="text-white">動態提領策略</strong>，旨在退休後維持穩定的生活水準，同時透過「護欄機制」調整提領金額，避免資產過早耗盡。
+                </p>
+              </div>
+
+              {/* Core Rules */}
+              <div className="space-y-4">
+                <h4 className="text-lg font-semibold text-purple-400 mb-2">三大核心規則</h4>
+
+                {/* Rule 1 */}
+                <div className="bg-zinc-950/50 border border-zinc-800 rounded-lg p-4">
+                  <div className="flex items-start gap-3 mb-2">
+                    <div className="flex-shrink-0 w-8 h-8 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold">1</div>
+                    <div>
+                      <h5 className="font-semibold text-zinc-100 mb-1">通膨調整規則</h5>
+                      <p className="text-sm text-zinc-400">
+                        當投資組合<span className="text-emerald-400">有正報酬</span>時，隔年提領金額按<strong className="text
+-white">3% 通膨率</strong>調整。
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Rule 2 */}
+                <div className="bg-zinc-950/50 border border-zinc-800 rounded-lg p-4">
+                  <div className="flex items-start gap-3 mb-2">
+                    <div className="flex-shrink-0 w-8 h-8 rounded-full bg-red-500/20 text-red-400 flex items-center justify-center font-bold">2</div>
+                    <div>
+                      <h5 className="font-semibold text-zinc-100 mb-1">資本保護護欄 (Upper Guardrail)</h5>
+                      <p className="text-sm text-zinc-400 mb-2">
+                        當提領率超過初始提領率的<strong className="text-white">120%</strong>（例如從 4% 升至 4.8%），代表資產縮水過多。
+                      </p>
+                      <div className="bg-red-950/30 border-l-4 border-red-500 px-3 py-2 rounded">
+                        <p className="text-sm text-red-300">
+                          ⚠️ <strong>減少 10%</strong> 提領金額，保護資產不過度縮水
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Rule 3 */}
+                <div className="bg-zinc-950/50 border border-zinc-800 rounded-lg p-4">
+                  <div className="flex items-start gap-3 mb-2">
+                    <div className="flex-shrink-0 w-8 h-8 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold">3</div>
+                    <div>
+                      <h5 className="font-semibold text-zinc-100 mb-1">繁榮護欄 (Lower Guardrail)</h5>
+                      <p className="text-sm text-zinc-400 mb-2">
+                        當提領率低於初始提領率的<strong className="text-white">80%</strong>（例如從 4% 降至 3.2%），代表資產成長良好。
+                      </p>
+                      <div className="bg-emerald-950/30 border-l-4 border-emerald-500 px-3 py-2 rounded">
+                        <p className="text-sm text-emerald-300">
+                          ✓ <strong>增加 10%</strong> 提領金額，提升生活品質
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Example */}
+              <div className="bg-purple-950/20 border border-purple-800/30 rounded-lg p-4">
+                <h5 className="font-semibold text-purple-300 mb-2 flex items-center gap-2">
+                  <Info className="w-4 h-4" />
+                  模擬範例
+                </h5>
+                <p className="text-sm text-zinc-300 leading-relaxed">
+                  假設退休時有 <strong className="text-white">$1,000萬</strong>，初始提領率 <strong className="text-emerald-400">4%</strong>（年提領 $40萬）。
+                  第一年投資獲利，隔年提領調整為 $40萬 × 1.03 = <strong className="text-white">$41.2萬</strong>。
+                  若某年市場大跌導致資產縮水至 $850萬，提領率升至 41.2 / 850 = <strong className="text-red-400">4.85%</strong>，
+                  觸發<span className="text-red-400">上護欄</span>，下年提領減少 10% 至 <strong className="text-white">$37萬</strong>。
+                </p>
+              </div>
+
+              {/* Benefits */}
+              <div>
+                <h4 className="text-lg font-semibold text-zinc-200 mb-3">為什麼使用 GK 法則？</h4>
+                <ul className="space-y-2 text-sm text-zinc-300">
+                  <li className="flex items-start gap-2">
+                    <span className="text-emerald-400 mt-0.5">✓</span>
+                    <span><strong className="text-white">動態平衡：</strong>市場波動時自動調整，避免固定提領導致資產過早耗盡</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="text-emerald-400 mt-0.5">✓</span>
+                    <span><strong className="text-white">彈性應對：</strong>牛市時增加提領享受生活，熊市時減少支出保護資本</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="text-emerald-400 mt-0.5">✓</span>
+                    <span><strong className="text-white">長期永續：</strong>提高退休資產維持 30 年以上的成功率</span>
+                  </li>
+                </ul>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="sticky bottom-0 bg-zinc-900 border-t border-zinc-800 p-4">
+              <button
+                onClick={() => setShowGKModal(false)}
+                className="w-full bg-purple-600 hover:bg-purple-500 text-white font-semibold py-3 rounded-lg transition-colors"
+              >
+                了解了
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
